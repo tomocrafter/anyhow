@@ -46,6 +46,8 @@
 
 use crate::Error;
 use core::fmt::{Debug, Display};
+#[cfg(track_caller)]
+use core::panic::Location;
 
 #[cfg(feature = "std")]
 use crate::StdError;
@@ -63,11 +65,17 @@ impl<T> AdhocKind for &T where T: ?Sized + Display + Debug + Send + Sync + 'stat
 
 impl Adhoc {
     #[cold]
+    #[cfg_attr(track_caller, track_caller)]
     pub fn new<M>(self, message: M) -> Error
     where
         M: Display + Debug + Send + Sync + 'static,
     {
-        Error::from_adhoc(message, backtrace!())
+        Error::from_adhoc(
+            message,
+            backtrace!(),
+            #[cfg(track_caller)]
+            Location::caller(),
+        )
     }
 }
 
@@ -84,11 +92,26 @@ impl<E> TraitKind for E where E: Into<Error> {}
 
 impl Trait {
     #[cold]
+    #[cfg_attr(track_caller, track_caller)]
     pub fn new<E>(self, error: E) -> Error
     where
         E: Into<Error>,
     {
-        error.into()
+        #[allow(unused_mut)]
+        let mut error: Error = error.into();
+
+        // The direct Into conversion on the previous line loses caller location
+        // because the generic `impl<T, U> Into<U> for T where U: From<T>` in
+        // libcore is not annotated #[track_caller]. We can't just add that
+        // attribute because of the widespread performance impact and code bloat
+        // on all uses of the Into trait. We'll need something like a
+        // #[rustc_conditional_track_caller] which is equivalent to track_caller
+        // if and only if the function being called inside the function body is
+        // already track_caller itself.
+        #[cfg(track_caller)]
+        error.set_location(Location::caller());
+
+        error
     }
 }
 
@@ -109,8 +132,14 @@ impl BoxedKind for Box<dyn StdError + Send + Sync> {}
 #[cfg(feature = "std")]
 impl Boxed {
     #[cold]
+    #[cfg_attr(track_caller, track_caller)]
     pub fn new(self, error: Box<dyn StdError + Send + Sync>) -> Error {
         let backtrace = backtrace_if_absent!(&*error);
-        Error::from_boxed(error, backtrace)
+        Error::from_boxed(
+            error,
+            backtrace,
+            #[cfg(track_caller)]
+            Location::caller(),
+        )
     }
 }

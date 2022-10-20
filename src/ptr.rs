@@ -58,6 +58,16 @@ where
             lifetime: PhantomData,
         }
     }
+
+    #[cfg(track_caller)]
+    pub unsafe fn deref(&self) -> &T {
+        &*self.ptr.as_ptr()
+    }
+
+    #[cfg(track_caller)]
+    pub unsafe fn deref_mut(&mut self) -> &mut T {
+        &mut *self.ptr.as_ptr()
+    }
 }
 
 #[repr(transparent)]

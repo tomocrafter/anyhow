@@ -59,7 +59,12 @@ const PROBE: &str = r#"
 fn main() {
     if cfg!(feature = "std") {
         match compile_probe() {
-            Some(status) if status.success() => println!("cargo:rustc-cfg=backtrace"),
+            Some(status) if status.success() => {
+                println!("cargo:rustc-cfg=backtrace");
+                if cfg!(feature = "track_caller") {
+                    println!("cargo:rustc-cfg=track_caller");
+                }
+            }
             _ => {}
         }
     }

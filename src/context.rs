@@ -2,6 +2,8 @@ use crate::error::ContextError;
 use crate::{Context, Error, StdError};
 use core::convert::Infallible;
 use core::fmt::{self, Debug, Display, Write};
+#[cfg(track_caller)]
+use core::panic::Location;
 
 #[cfg(backtrace)]
 use std::any::{Demand, Provider};
@@ -10,7 +12,11 @@ mod ext {
     use super::*;
 
     pub trait StdError {
-        fn ext_context<C>(self, context: C) -> Error
+        fn ext_context<C>(
+            self,
+            context: C,
+            #[cfg(track_caller)] location: &'static Location<'static>,
+        ) -> Error
         where
             C: Display + Send + Sync + 'static;
     }
@@ -20,21 +26,39 @@ mod ext {
     where
         E: std::error::Error + Send + Sync + 'static,
     {
-        fn ext_context<C>(self, context: C) -> Error
+        fn ext_context<C>(
+            self,
+            context: C,
+            #[cfg(track_caller)] location: &'static Location<'static>,
+        ) -> Error
         where
             C: Display + Send + Sync + 'static,
         {
             let backtrace = backtrace_if_absent!(&self);
-            Error::from_context(context, self, backtrace)
+            Error::from_context(
+                context,
+                self,
+                backtrace,
+                #[cfg(track_caller)]
+                location,
+            )
         }
     }
 
     impl StdError for Error {
-        fn ext_context<C>(self, context: C) -> Error
+        fn ext_context<C>(
+            self,
+            context: C,
+            #[cfg(track_caller)] location: &'static Location<'static>,
+        ) -> Error
         where
             C: Display + Send + Sync + 'static,
         {
-            self.context(context)
+            self.context_at(
+                context,
+                #[cfg(track_caller)]
+                location,
+            )
         }
     }
 }
@@ -43,6 +67,7 @@ impl<T, E> Context<T, E> for Result<T, E>
 where
     E: ext::StdError + Send + Sync + 'static,
 {
+    #[cfg_attr(track_caller, track_caller)]
     fn context<C>(self, context: C) -> Result<T, Error>
     where
         C: Display + Send + Sync + 'static,
@@ -51,10 +76,15 @@ where
         // in ext_context.
         match self {
             Ok(ok) => Ok(ok),
-            Err(error) => Err(error.ext_context(context)),
+            Err(error) => Err(error.ext_context(
+                context,
+                #[cfg(track_caller)]
+                Location::caller(),
+            )),
         }
     }
 
+    #[cfg_attr(track_caller, track_caller)]
     fn with_context<C, F>(self, context: F) -> Result<T, Error>
     where
         C: Display + Send + Sync + 'static,
@@ -62,7 +92,11 @@ where
     {
         match self {
             Ok(ok) => Ok(ok),
-            Err(error) => Err(error.ext_context(context())),
+            Err(error) => Err(error.ext_context(
+                context(),
+                #[cfg(track_caller)]
+                Location::caller(),
+            )),
         }
     }
 }
@@ -88,6 +122,7 @@ where
 /// }
 /// ```
 impl<T> Context<T, Infallible> for Option<T> {
+    #[cfg_attr(track_caller, track_caller)]
     fn context<C>(self, context: C) -> Result<T, Error>
     where
         C: Display + Send + Sync + 'static,
@@ -96,10 +131,16 @@ impl<T> Context<T, Infallible> for Option<T> {
         // backtrace.
         match self {
             Some(ok) => Ok(ok),
-            None => Err(Error::from_display(context, backtrace!())),
+            None => Err(Error::from_display(
+                context,
+                backtrace!(),
+                #[cfg(track_caller)]
+                Location::caller(),
+            )),
         }
     }
 
+    #[cfg_attr(track_caller, track_caller)]
     fn with_context<C, F>(self, context: F) -> Result<T, Error>
     where
         C: Display + Send + Sync + 'static,
@@ -107,8 +148,36 @@ impl<T> Context<T, Infallible> for Option<T> {
     {
         match self {
             Some(ok) => Ok(ok),
-            None => Err(Error::from_display(context(), backtrace!())),
+            None => Err(Error::from_display(
+                context(),
+                backtrace!(),
+                #[cfg(track_caller)]
+                Location::caller(),
+            )),
         }
+    }
+}
+
+impl<C, E> ContextError<C, E> {
+    #[cfg(track_caller)]
+    pub(crate) fn debug_with_location(
+        &self,
+        location: &Location<'static>,
+        formatter: &mut fmt::Formatter,
+    ) -> fmt::Result
+    where
+        C: Display,
+        E: Debug,
+    {
+        formatter
+            .debug_struct("Error")
+            .field("context", &Quoted(&self.context))
+            .field(
+                "location",
+                &format_args!("\"{}:{}\"", location.file(), location.line()),
+            )
+            .field("source", &self.error)
+            .finish()
     }
 }
 
